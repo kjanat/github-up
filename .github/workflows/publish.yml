@@ -6,9 +6,11 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: { name: npm, url: https://npm.im/github-down }
+    env: { NPM_CONFIG_PROVENANCE: "${{ vars.NPM_CONFIG_PROVENANCE || 'true' }}" }
     steps: [
       uses: actions/checkout@v7,
       uses: kjanat/runner@master,
       uses: oven-sh/setup-bun@v2,
-      run: runner install --frozen --kill-on-fail publish:npm,
+      { uses: actions/setup-node@v6, with: { node-version-file: .node-version, registry-url: https://registry.npmjs.org } },
+      { run: runner install --frozen --kill-on-fail publish:npm, env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" } },
     ]

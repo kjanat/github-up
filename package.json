@@ -68,7 +68,7 @@
 		"site:build": "runner build",
 		"prestart": "runner build",
 		"start": "bunx serve dist/site",
-		"publish:npm": "npm view \"$(jq -r '\"\\(.name)@\\(.version)\"' package.json)\" version >/dev/null 2>&1 && echo already published, skipping || bunx npm@latest publish --access public --provenance",
+		"publish:npm": "npm view \"$(jq -r '\"\\(.name)@\\(.version)\"' package.json)\" version >/dev/null 2>&1 && echo already published, skipping || bunx npm@11 publish",
 		"publish:pkg-pr-new": "bunx pkg-pr-new publish --bun --bin --packageManager=npm,bun,pnpm"
 	},
 	"dependencies": {
@@ -90,13 +90,25 @@
 		"node": ">=22.18"
 	},
 	"devEngines": {
-		"packageManager": [{
-			"name": "bun",
-			"onFail": "warn"
-		}],
-		"runtime": [{
-			"name": "bun",
-			"onFail": "warn"
-		}]
+		"packageManager": [
+			{
+				"name": "bun",
+				"onFail": "warn"
+			}
+		],
+		"runtime": [
+			{
+				"name": "bun",
+				"onFail": "warn"
+			}
+		]
+	},
+	"volta": {
+		"node": "26.5.0",
+		"npm": "11.18.0"
+	},
+	"publishConfig": {
+		"access": "public",
+		"tag": "latest"
 	}
 }
