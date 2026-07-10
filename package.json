@@ -2,7 +2,7 @@
 	"name": "github-up",
 	"version": "0.1.0",
 	"description": "Is GitHub down? Probably...",
-	"homepage": "https://github-up.kjanat.dev/",
+	"homepage": "https://github-up.kjanat.dev",
 	"bugs": {
 		"url": "https://github.com/kjanat/github-up/issues"
 	},
