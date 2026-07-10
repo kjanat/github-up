@@ -96,4 +96,12 @@ function describeIndicator(indicator: IncidentImpactValue): string {
 	return INDICATOR_DESCRIPTIONS[indicator];
 }
 
-export { componentsImpact, componentStatusImpact, deriveConservativeIndicator, describeIndicator, isIncidentImpact, normalizeIncidentImpact };
+export {
+	componentsImpact,
+	componentStatusImpact,
+	deriveConservativeIndicator,
+	describeIndicator,
+	higherImpact,
+	isIncidentImpact,
+	normalizeIncidentImpact,
+};

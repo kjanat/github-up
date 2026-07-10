@@ -1,5 +1,6 @@
 import { DOWNDETECTOR_URL } from '#github-down/lib/constants';
 import { openCdpTarget } from '#github-down/lib/downdetector/cdp';
+import { launchBrowser } from '#github-down/lib/downdetector/chrome';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 const originalFetch = globalThis.fetch;
@@ -14,6 +15,17 @@ type SentMessage = {
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	globalThis.WebSocket = originalWebSocket;
+});
+
+describe(launchBrowser.name, () => {
+	test('surfaces a spawn failure instead of a generic CDP timeout', async () => {
+		const result = await launchBrowser('/no/such/chrome-binary');
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error('expected launch to fail');
+		expect(result.error).toContain('Chrome launch failed');
+		expect(result.error).toContain('ENOENT');
+	});
 });
 
 describe(openCdpTarget.name, () => {

@@ -19,6 +19,9 @@ type PogoSnapshotResult =
 
 type PageEvaluate = (expression: string) => Promise<unknown>;
 
+/** Page-side expression producing a {@linkcode PogoSnapshot}. Exported so the
+ * inline worker source in webview.ts (which can't import this module)
+ * interpolates this exact expression instead of duplicating it. */
 const POGO_SNAPSHOT_EXPRESSION = `({
 	title: document.title,
 	pogo: window.PogoConfig ?? null,
@@ -153,4 +156,4 @@ function detectPossibleProblemsNote(
 		: undefined;
 }
 
-export { detectPossibleProblemsNote, pollPogoSnapshot, pollPogoSnapshotFromEvaluate, POSSIBLE_PROBLEMS_PATTERN };
+export { detectPossibleProblemsNote, POGO_SNAPSHOT_EXPRESSION, pollPogoSnapshot, pollPogoSnapshotFromEvaluate, POSSIBLE_PROBLEMS_PATTERN };

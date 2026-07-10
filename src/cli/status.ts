@@ -1,8 +1,9 @@
+import { type ComponentKey, componentsNamedInText, nameMatchesComponents, nameMatchesManyComponents } from '#github-down/cli/model';
 import type { Source, StatusRow } from '#github-down/cli/model';
 import { EXIT_CODES } from '#github-down/lib/constants';
 import { checkDownDetector } from '#github-down/lib/downdetector';
 import { checkGitHub } from '#github-down/lib/github';
-import { deriveConservativeIndicator, describeIndicator } from '#github-down/lib/severity';
+import { componentsImpact, deriveConservativeIndicator, describeIndicator, higherImpact } from '#github-down/lib/severity';
 import type { ComponentStatus } from '#github-down/lib/types';
 
 function normalizeComponentStatus(value: string): ComponentStatus {
@@ -117,6 +118,88 @@ async function checkSources(
 	);
 }
 
+function addComponentsNamedInItems(
+	affected: Set<ComponentKey>,
+	items: readonly { name: string }[],
+	selected: ReadonlySet<ComponentKey>,
+): boolean {
+	let hasBroadMatch = false;
+
+	for (const item of items) {
+		if (nameMatchesManyComponents(item.name)) hasBroadMatch = true;
+		for (const key of componentsNamedInText(item.name, selected)) {
+			affected.add(key);
+		}
+	}
+
+	return hasBroadMatch;
+}
+
+function matchedComponentKeys(
+	incidents: readonly { name: string }[],
+	affectedComponents: readonly { name: string }[],
+	selected: ReadonlySet<ComponentKey>,
+): ComponentKey[] {
+	const affected = new Set<ComponentKey>();
+	const broadFromIncidents = addComponentsNamedInItems(affected, incidents, selected);
+	const broadFromComponents = addComponentsNamedInItems(affected, affectedComponents, selected);
+
+	if (broadFromIncidents || broadFromComponents) {
+		for (const key of selected) affected.add(key);
+	}
+
+	return [...selected].filter((key) => affected.has(key));
+}
+
+/**
+ * Narrows a GitHub row to incidents/components naming the selected components
+ * and re-derives its result from those matches (operational when none match).
+ * Other rows, unavailable rows, and the empty selection pass through unchanged.
+ */
+function filterGitHubByComponents(
+	row: StatusRow,
+	selected: ReadonlySet<ComponentKey>,
+): StatusRow {
+	if (
+		row.source !== 'github'
+		|| selected.size === 0
+		|| row.indicator === 'unavailable'
+	) {
+		return row;
+	}
+
+	const incidents = row.incidents?.filter((incident) => nameMatchesComponents(incident.name, selected))
+		?? [];
+	const affectedComponents = row.affectedComponents?.filter((component) => nameMatchesComponents(component.name, selected)) ?? [];
+
+	const matchCount = incidents.length + affectedComponents.length;
+	// Only name the components that actually appear in a matched
+	// incident/component — not every queried one — so `--actions --pages`
+	// reports just Actions when Pages is unaffected. Broad incidents like
+	// "multiple GitHub services" affect all queried components.
+	const affectedKeys = matchedComponentKeys(incidents, affectedComponents, selected);
+
+	// Matched components carry real statuses, so severity derives from them
+	// (degraded Actions must not read as a major outage). A matched incident
+	// alone still means something is wrong, hence the 'minor' floor.
+	const componentIndicator = componentsImpact(affectedComponents);
+	const indicator = incidents.length > 0
+		? higherImpact(componentIndicator, 'minor')
+		: componentIndicator;
+
+	return {
+		source: 'github',
+		indicator,
+		summaryText: matchCount > 0
+			? `${matchCount} report${matchCount === 1 ? '' : 's'} affecting ${affectedKeys.join(', ')}`
+			: `No incidents reported for ${[...selected].join(', ')}`,
+		incidents: incidents.length > 0 ? incidents : null,
+		affectedComponents: affectedComponents.length > 0
+			? affectedComponents
+			: null,
+	};
+}
+
 function getExitCode(row: StatusRow): number {
 	const code = EXIT_CODES[row.indicator];
 	// An active incident is a failure even when the page indicator reads operational.
@@ -146,4 +229,4 @@ function sortRows(rows: readonly StatusRow[]): StatusRow[] {
 	return [...rows].sort((left, right) => left.source.localeCompare(right.source));
 }
 
-export { checkDowndetectorSource, checkGitHubSource, checkSource, checkSources, getExitCode, sortRows, summarizeExitCode };
+export { checkDowndetectorSource, checkGitHubSource, checkSource, checkSources, filterGitHubByComponents, getExitCode, sortRows, summarizeExitCode };

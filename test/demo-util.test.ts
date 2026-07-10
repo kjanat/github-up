@@ -20,6 +20,7 @@ describe('demo utilities', () => {
 		expect(getString(42, 'fallback')).toBe('fallback');
 		expect(isRecord({})).toBe(true);
 		expect(isRecord(null)).toBe(false);
+		expect(isRecord([])).toBe(false);
 	});
 
 	test('formats errors and dates', () => {

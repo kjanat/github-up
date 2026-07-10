@@ -15,7 +15,7 @@ export const StatusAPIEndpoints = {
 	},
 	ScheduledMaintenances: {
 		active() {
-			return `${API_V2_BASE}/scheduled-maintenances/upcoming.json` as const;
+			return `${API_V2_BASE}/scheduled-maintenances/active.json` as const;
 		},
 		all() {
 			return `${API_V2_BASE}/scheduled-maintenances.json` as const;

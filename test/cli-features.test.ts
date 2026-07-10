@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { execPath } from 'node:process';
 
-import { parseSourceList, selectedSources } from '#github-down/cli/flags';
-import { sources } from '#github-down/cli/model';
-import type { Source, StatusRow } from '#github-down/cli/model';
-import { getExitCode, summarizeExitCode } from '#github-down/cli/status';
+import { parseComponentList, parseSourceList, selectedComponents, selectedSources } from '#github-down/cli/flags';
+import { nameMatchesComponents, sources } from '#github-down/cli/model';
+import type { ComponentKey, Source, StatusRow } from '#github-down/cli/model';
+import { filterGitHubByComponents, getExitCode, summarizeExitCode } from '#github-down/cli/status';
 import { CHROME_PATH_ENV } from '#github-down/lib/constants';
 import { findChrome } from '#github-down/lib/downdetector/chrome';
 
@@ -30,6 +30,186 @@ function githubRow(
 		...overrides,
 	};
 }
+
+const componentFlags = (
+	selected: readonly ComponentKey[],
+	booleans: Partial<Record<ComponentKey, boolean>> = {},
+) => ({
+	component: selected.map((key) => [key]),
+	actions: false,
+	api: false,
+	codespaces: false,
+	copilot: false,
+	git: false,
+	issues: false,
+	packages: false,
+	pages: false,
+	pr: false,
+	webhooks: false,
+	...booleans,
+});
+
+describe('selectedComponents', () => {
+	test('unions --component array with convenience flags and dedupes', () => {
+		expect(
+			[
+				...selectedComponents(
+					componentFlags(['actions'], { pages: true, actions: true }),
+				),
+			].sort(),
+		).toEqual(['actions', 'pages']);
+	});
+
+	test('empty when nothing selected', () => {
+		expect(selectedComponents(componentFlags([])).size).toBe(0);
+	});
+});
+
+describe(parseComponentList.name, () => {
+	test('splits a comma-separated token and trims whitespace', () => {
+		expect(parseComponentList('actions, pr ')).toEqual(['actions', 'pr']);
+	});
+
+	test('throws a clear error for an unknown component', () => {
+		expect(() => parseComponentList('actions,bogus')).toThrow(
+			"Invalid value 'bogus' for flag --component. Allowed: actions, api, codespaces, copilot, git, issues, packages, pages, pr, webhooks",
+		);
+	});
+});
+
+describe(filterGitHubByComponents.name, () => {
+	test('keeps matches and derives severity from component statuses', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow(),
+			new Set<ComponentKey>(['actions']),
+		);
+
+		// Degraded Actions plus a matched incident is 'minor', not a blanket
+		// 'major': matched components carry real statuses.
+		expect(filtered).toMatchObject({
+			source: 'github',
+			indicator: 'minor',
+			summaryText: '2 reports affecting actions',
+			incidents: [
+				{
+					name: 'Actions is experiencing degraded availability',
+					status: 'investigating',
+				},
+			],
+			affectedComponents: [
+				{ name: 'Actions', status: 'degraded_performance' },
+			],
+		});
+	});
+
+	test('promotes to major when a matched component reports an outage', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow({
+				affectedComponents: [{ name: 'Actions', status: 'major_outage' }],
+			}),
+			new Set<ComponentKey>(['actions']),
+		);
+
+		expect(filtered.indicator).toBe('major');
+	});
+
+	test('floors at minor when only an incident matches', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow({ affectedComponents: null }),
+			new Set<ComponentKey>(['actions']),
+		);
+
+		expect(filtered).toMatchObject({
+			indicator: 'minor',
+			summaryText: '1 report affecting actions',
+			affectedComponents: null,
+		});
+	});
+
+	test('names only affected components, omitting queried-but-unaffected ones', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow(),
+			new Set<ComponentKey>(['actions', 'pages']),
+		);
+
+		expect(filtered.summaryText).toContain('actions');
+		expect(filtered.summaryText).not.toContain('pages');
+	});
+
+	test('reports operational when nothing mentions the component', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow({
+				incidents: null,
+				affectedComponents: [{ name: 'Packages', status: 'major_outage' }],
+			}),
+			new Set<ComponentKey>(['pages']),
+		);
+
+		// 'pages' must not substring-match "Packages".
+		expect(filtered).toMatchObject({
+			indicator: 'none',
+			incidents: null,
+			affectedComponents: null,
+			summaryText: 'No incidents reported for pages',
+		});
+	});
+
+	test('word-bounds component matching', () => {
+		const git = new Set<ComponentKey>(['git']);
+		expect(nameMatchesComponents('Git Operations', git)).toBe(true);
+		expect(nameMatchesComponents('GitHub is down', git)).toBe(false);
+
+		const pr = new Set<ComponentKey>(['pr']);
+		expect(nameMatchesComponents('Pull Requests', pr)).toBe(true);
+		expect(nameMatchesComponents('Degraded pull request merges', pr)).toBe(true);
+	});
+
+	test('matches broad multi-service incident names', () => {
+		const filtered = filterGitHubByComponents(
+			githubRow({
+				incidents: [
+					{
+						name: 'Incident with multiple GitHub services',
+						status: 'investigating',
+					},
+				],
+				affectedComponents: null,
+			}),
+			new Set<ComponentKey>(['pages']),
+		);
+
+		expect(filtered).toMatchObject({
+			indicator: 'minor',
+			summaryText: '1 report affecting pages',
+		});
+	});
+
+	test('passes through the empty selection unchanged', () => {
+		const row = githubRow();
+		expect(filterGitHubByComponents(row, new Set<ComponentKey>())).toBe(row);
+	});
+
+	test('leaves unavailable rows untouched', () => {
+		const row = githubRow({
+			indicator: 'unavailable',
+			incidents: null,
+			affectedComponents: null,
+		});
+		expect(filterGitHubByComponents(row, new Set<ComponentKey>(['actions'])))
+			.toBe(row);
+	});
+
+	test('leaves downdetector rows untouched', () => {
+		const row: StatusRow = {
+			source: 'downdetector',
+			indicator: 'major',
+			summaryText: 'outage reported',
+			reportsOutage: true,
+		};
+		expect(filterGitHubByComponents(row, new Set<ComponentKey>(['actions'])))
+			.toBe(row);
+	});
+});
 
 describe(parseSourceList.name, () => {
 	test('splits a comma-separated token', () => {
@@ -58,6 +238,14 @@ describe(selectedSources.name, () => {
 		const lists: readonly (readonly Source[])[] = [
 			['github'],
 			['downdetector'],
+		];
+		expect(selectedSources(lists)).toEqual(['github', 'downdetector']);
+	});
+
+	test('dedupes repeated sources so nothing is checked twice', () => {
+		const lists: readonly (readonly Source[])[] = [
+			['github'],
+			['github', 'downdetector'],
 		];
 		expect(selectedSources(lists)).toEqual(['github', 'downdetector']);
 	});

@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -118,6 +118,37 @@ async function waitForCdp(base: string, timeoutMs: number): Promise<boolean> {
 	return false;
 }
 
+/** Reads the CDP port Chrome chose from the `DevToolsActivePort` file it
+ * writes into the user data dir when launched with `--remote-debugging-port=0`
+ * (letting the OS pick a free port instead of racing other processes for a
+ * hardcoded one).
+ *
+ * @param userDataDir - The temporary user data directory passed to Chrome.
+ * @param timeoutMs - The maximum time to wait for Chrome to write the file, in milliseconds.
+ * @returns A promise that resolves to the port number, or `null` if the file never appeared.
+ */
+async function readDevToolsPort(
+	userDataDir: string,
+	timeoutMs: number,
+): Promise<number | null> {
+	// biome-ignore lint/security/noSecrets: Chrome's well-known port-file name, not a secret
+	const portFile = join(userDataDir, 'DevToolsActivePort');
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		try {
+			const firstLine = readFileSync(portFile, 'utf8').split('\n')[0]?.trim();
+			const port = Number(firstLine);
+			if (Number.isInteger(port) && port > 0) return port;
+		} catch {
+			// not written yet; retry until deadline
+		}
+
+		await sleep(100);
+	}
+
+	return null;
+}
+
 /** Launches a headless Chrome browser with a temporary user data directory and remote debugging enabled.
  *
  * @param chrome - The path to the Chrome executable to launch.
@@ -132,7 +163,6 @@ async function launchBrowser(chrome: string): Promise<LaunchBrowserResult> {
 		return { ok: false, error: `mkdtemp failed: ${message}` };
 	}
 
-	const port = 9222 + Math.floor(Math.random() * 1000);
 	const proc = spawn(
 		chrome,
 		[
@@ -142,14 +172,39 @@ async function launchBrowser(chrome: string): Promise<LaunchBrowserResult> {
 			'--disable-blink-features=AutomationControlled',
 			'--window-size=1920,1080',
 			`--user-data-dir=${userDataDir}`,
-			`--remote-debugging-port=${port}`,
+			'--remote-debugging-port=0',
 			'--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
 			'about:blank',
 		],
 		{ stdio: 'ignore' },
 	);
+	// A failed exec (e.g. ENOENT/EACCES) or an early exit must surface its own
+	// message immediately, not burn the port-file wait and report a generic
+	// CDP timeout. The listener also keeps the 'error' event from crashing the
+	// process unhandled.
+	const launchFailure = new Promise<{ failed: string }>((resolve) => {
+		proc.once('error', (error) => resolve({ failed: error.message }));
+		proc.once('exit', (code, signal) =>
+			resolve({
+				failed: `Chrome exited before CDP came up (${signal ?? code ?? 'unknown'})`,
+			}));
+	});
 
-	const base = `http://localhost:${port}`;
+	const outcome = await Promise.race([
+		readDevToolsPort(userDataDir, 5000),
+		launchFailure,
+	]);
+	if (typeof outcome !== 'number') {
+		cleanupBrowser(proc, userDataDir);
+		return {
+			ok: false,
+			error: outcome === null
+				? 'CDP endpoint never came up'
+				: `Chrome launch failed: ${outcome.failed}`,
+		};
+	}
+
+	const base = `http://localhost:${outcome}`;
 	if (!(await waitForCdp(base, 5000))) {
 		cleanupBrowser(proc, userDataDir);
 		return { ok: false, error: 'CDP endpoint never came up' };

@@ -2,7 +2,7 @@ import { DOWNDETECTOR_URL } from '#github-down/lib/constants';
 import { openCdpTarget } from '#github-down/lib/downdetector/cdp';
 import { cleanupBrowser, findChrome, launchBrowser } from '#github-down/lib/downdetector/chrome';
 import { detectPossibleProblemsNote, pollPogoSnapshot } from '#github-down/lib/downdetector/snapshot';
-import { checkDownDetectorWithWebView, isBunRuntime } from '#github-down/lib/downdetector/webview';
+import { checkDownDetectorWithWebView, hasBunWebView } from '#github-down/lib/downdetector/webview';
 import type { Signal } from '#github-down/lib/types';
 
 /** Checks the status of GitHub on Downdetector.
@@ -18,7 +18,9 @@ import type { Signal } from '#github-down/lib/types';
  * @see {@link https://downdetector.com/status/github/} for the target page.
  */
 async function check(chromePath?: string): Promise<Signal> {
-	if (isBunRuntime()) {
+	// A Bun runtime without WebView support (older Bun) falls through to the
+	// CDP path below, which works fine under Bun when a Chromium exists.
+	if (hasBunWebView()) {
 		return checkDownDetectorWithWebView(DOWNDETECTOR_URL, chromePath);
 	}
 

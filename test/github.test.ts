@@ -28,6 +28,41 @@ describe('checkGitHub', () => {
 		});
 	});
 
+	test('degrades to unknown when a 200 response has the wrong shape', async () => {
+		await withSummaryBody({ hello: 'world' }, async (server) => {
+			const result = await checkGitHub(server.baseUrl);
+
+			expect(result).toMatchObject({
+				kind: 'unknown',
+				reason: 'unexpected response shape from status API',
+			});
+		});
+	});
+
+	test('rejects incomplete summaries whose fields the row mapping reads', async () => {
+		const bodies = [
+			// status missing indicator/description
+			{ status: {}, components: [], incidents: [] },
+			// incident missing impact
+			{
+				status: { description: 'ok', indicator: 'none' },
+				components: [],
+				incidents: [{ name: 'x', status: 'investigating' }],
+			},
+		];
+
+		for (const body of bodies) {
+			await withSummaryBody(body, async (server) => {
+				const result = await checkGitHub(server.baseUrl);
+
+				expect(result).toMatchObject({
+					kind: 'unknown',
+					reason: 'unexpected response shape from status API',
+				});
+			});
+		}
+	});
+
 	test('parses the up fixture summary', async () => {
 		await withSummaryFixture('github-up.json', async (server) => {
 			const result = await checkGitHub(server.baseUrl);

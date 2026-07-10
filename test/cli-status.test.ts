@@ -42,6 +42,7 @@ function upOutputRow() {
 // We only assert on the plain text this package produces, plus whether
 // styling is present — not on the exact escape bytes ansispeck emits for a
 // given style, which is that package's own API surface, not ours.
+// oxlint-disable-next-line no-control-regex
 const ESCAPE = /\x1b/;
 
 // Trailing pointer to the web page, appended under human (TTY) status output.
@@ -218,6 +219,56 @@ GitHub
 			expect(result.stderr).toEqual([]);
 			expect(JSON.parse(result.stdout[0] ?? 'null')).toEqual(downOutputRow());
 			expect(server.requests).toEqual(['/api/v2/summary.json']);
+		});
+	});
+
+	test('root CLI filters by component shorthand flags', async () => {
+		await withSummaryFixture('github-down.json', async (server) => {
+			const result = await githubDown.execute(
+				['status', '--source', 'github', '--actions'],
+				{
+					env: { [githubStatusBaseEnvVar]: server.baseUrl },
+				},
+			);
+
+			expect(result.exitCode).toBe(EXIT_CODES.major);
+			expect(result.stderr).toEqual([]);
+			expect(JSON.parse(result.stdout[0] ?? 'null')).toEqual([
+				{
+					source: 'github',
+					status: 'major',
+					details: '2 reports affecting actions',
+					incidents: [
+						{
+							name: 'Actions is experiencing degraded availability',
+							status: 'investigating',
+						},
+					],
+					affected: [{ name: 'Actions', status: 'partial_outage' }],
+				},
+			]);
+		});
+	});
+
+	test('--prs alias reports operational when pull requests are unaffected', async () => {
+		await withSummaryFixture('github-down.json', async (server) => {
+			const result = await runCommand(
+				statusCommand,
+				['--source', 'github', '--prs'],
+				{ env: { [githubStatusBaseEnvVar]: server.baseUrl } },
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toEqual([]);
+			expect(JSON.parse(result.stdout[0] ?? 'null')).toEqual([
+				{
+					source: 'github',
+					status: 'up',
+					details: 'No incidents reported for pr',
+					incidents: null,
+					affected: null,
+				},
+			]);
 		});
 	});
 

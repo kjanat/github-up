@@ -9,6 +9,7 @@
 	],
 	"prettier": { "allowed": false },
 	"languages": {
+		"Markdown": { "language_servers": ["!rumdl"] },
 		"TypeScript": { "language_servers": ["deno", "!vtsls", "!typescript-language-server", "...", "biome"] }
 	},
 	"lsp": {

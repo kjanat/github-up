@@ -2,6 +2,41 @@ import { GITHUB_STATUS_BASE } from '#github-down/lib/constants';
 import { StatusAPIEndpoints } from '#github-down/lib/github/endpoints';
 import type { Result, Summary } from '#github-down/lib/types';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNamedStatusItem(value: unknown): boolean {
+	return isRecord(value)
+		&& typeof value.name === 'string'
+		&& typeof value.status === 'string';
+}
+
+function isStatus(value: unknown): boolean {
+	return isRecord(value)
+		&& typeof value.indicator === 'string'
+		&& typeof value.description === 'string';
+}
+
+function isIncident(value: unknown): boolean {
+	return isNamedStatusItem(value)
+		&& isRecord(value)
+		&& typeof value.impact === 'string';
+}
+
+/** Structural check for the parts of a Statuspage summary this package reads
+ * or re-exports (`status`, `components`, `incidents`), so a 200 from a proxy
+ * or captive portal degrades to `unknown` instead of producing a wrong row or
+ * crashing downstream. */
+function isSummary(value: unknown): value is Summary {
+	return isRecord(value)
+		&& isStatus(value.status)
+		&& Array.isArray(value.components)
+		&& value.components.every(isNamedStatusItem)
+		&& Array.isArray(value.incidents)
+		&& value.incidents.every(isIncident);
+}
+
 async function getErrorReason(response: Response): Promise<string> {
 	try {
 		const body = await response.text();
@@ -33,8 +68,15 @@ async function check(
 				reason: await getErrorReason(response),
 			};
 		}
-		const summary: Summary = await response.json();
-		return { headers: response.headers, kind: 'ok', summary };
+		const parsed: unknown = await response.json();
+		if (!isSummary(parsed)) {
+			return {
+				headers: response.headers,
+				kind: 'unknown',
+				reason: 'unexpected response shape from status API',
+			};
+		}
+		return { headers: response.headers, kind: 'ok', summary: parsed };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		return { kind: 'unknown', reason: msg };

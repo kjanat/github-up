@@ -5,7 +5,7 @@
  * false otherwise.
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null;
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Escapes special HTML characters in a string to prevent XSS

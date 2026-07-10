@@ -101,6 +101,29 @@ github-down status --source github,downdetector
 github-down status -s github -s downdetector
 ```
 
+### pick your part
+
+only care about one thing? every GitHub component got shorthand flag.
+`--component` eat commas and repeats too, same as `--source`.
+
+```bash
+# is Actions cooked?
+github-down status --actions
+
+# many worry
+github-down status --pr --pages
+github-down github --component git,api
+```
+
+full set: `--actions`, `--api`, `--codespaces`, `--copilot`, `--git`,
+`--issue`/`--issues`, `--packages`, `--pages`, `--pr`/`--prs`, `--webhooks`.
+
+filter look at incident + component names, and severity come from what
+actually matched: degraded = exit `1`, real outage = exit `2`, nothing
+mention your thing = exit `0`. broad incident like "multiple GitHub services"
+count for whatever you asked. downdetector no know components; its row pass
+through whole.
+
 ## use in browser
 
 browser-safe door, GitHub Status only (downdetector need real chromium, no work

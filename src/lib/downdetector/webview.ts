@@ -1,5 +1,10 @@
 import { CHROME_PATH_ENV } from '#github-down/lib/constants';
-import { detectPossibleProblemsNote, pollPogoSnapshotFromEvaluate, POSSIBLE_PROBLEMS_PATTERN } from '#github-down/lib/downdetector/snapshot';
+import {
+	detectPossibleProblemsNote,
+	POGO_SNAPSHOT_EXPRESSION,
+	pollPogoSnapshotFromEvaluate,
+	POSSIBLE_PROBLEMS_PATTERN,
+} from '#github-down/lib/downdetector/snapshot';
 import type { Signal } from '#github-down/lib/types';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -38,7 +43,12 @@ type WebViewWorkerMessage =
 const WEBVIEW_WIDTH = 1920;
 const WEBVIEW_HEIGHT = 1080;
 const WEBVIEW_SNAPSHOT_TIMEOUT_MS = 20000;
-const WEBVIEW_WORKER_TIMEOUT_MS = 5000;
+/** Budget for `view.navigate()`, which runs before the snapshot poll starts. */
+const WEBVIEW_NAVIGATION_TIMEOUT_MS = 20000;
+/** The worker supervises navigation plus the whole snapshot poll, so its
+ * deadline must outlast both budgets combined or a slow navigation eats into
+ * the poll and every slow Cloudflare challenge dies as a worker timeout. */
+const WEBVIEW_WORKER_TIMEOUT_MS = WEBVIEW_NAVIGATION_TIMEOUT_MS + WEBVIEW_SNAPSHOT_TIMEOUT_MS + 5000;
 const CHROME_ARGV = [
 	'--headless=new',
 	'--disable-gpu',
@@ -89,16 +99,7 @@ function isPogoSnapshot(value) {
 async function pollPogoSnapshot(view) {
 	const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
 	while (Date.now() < deadline) {
-		const snapshot = await view.evaluate(`
-	+ JSON.stringify(`({
-	title: document.title,
-	pogo: window.PogoConfig ?? null,
-	h1: document.querySelector('h1')?.innerText ?? null,
-	cfChallenge: document.title === 'Just a moment...'
-		|| document.querySelector('script[src*="/cdn-cgi/challenge-platform/"]') !== null
-		|| document.body?.innerText?.includes('Enable JavaScript and cookies to continue') === true,
-})`)
-	+ `).catch(() => null);
+		const snapshot = await view.evaluate(${JSON.stringify(POGO_SNAPSHOT_EXPRESSION)}).catch(() => null);
 		if (isPogoSnapshot(snapshot) && snapshot.cfChallenge === true) {
 			return { kind: 'cloudflare-challenge' };
 		}
@@ -174,6 +175,12 @@ function getBunWebView(): WebViewConstructor | null {
 
 function isBunRuntime(): boolean {
 	return getBunGlobal() !== null;
+}
+
+/** Whether this runtime exposes `Bun.WebView`; callers without it should fall
+ * back to the CDP path instead of failing outright. */
+function hasBunWebView(): boolean {
+	return getBunWebView() !== null;
 }
 
 function webViewOptions(chromePath?: string): WebViewOptions {
@@ -317,8 +324,11 @@ async function checkDownDetectorWithWebView(
 		};
 	}
 
-	return checkWithWebViewWorker(url, chromePath);
+	// The worker's inlined `webViewOptions` copy has no access to this module,
+	// so the env override must be resolved before crossing the postMessage
+	// boundary.
+	return checkWithWebViewWorker(url, chromePath ?? process.env[CHROME_PATH_ENV]);
 }
 
-export { checkDownDetectorWithWebView, checkWithWebView, checkWithWebViewWorker, isBunRuntime };
+export { checkDownDetectorWithWebView, checkWithWebView, checkWithWebViewWorker, hasBunWebView, isBunRuntime };
 export type { WebView, WebViewConstructor };

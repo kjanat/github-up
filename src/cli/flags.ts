@@ -1,6 +1,6 @@
 import { flag, ParseError } from '@kjanat/dreamcli';
 
-import { type Source, sources } from '#github-down/cli/model';
+import { type ComponentKey, componentKeys, type Source, sources } from '#github-down/cli/model';
 import { CHROME_PATH_ENV, GITHUB_STATUS_BASE } from '#github-down/lib/constants';
 
 /** Builds a flag parser that splits one comma-separated token into validated
@@ -46,6 +46,9 @@ function csvEnumParser<T extends string>(
 /** Parses one `--source` token into the sources it names (comma-separated). */
 const parseSourceList = csvEnumParser(sources, 'source');
 
+/** Parses one `--component` token into the components it names (comma-separated). */
+const parseComponentList = csvEnumParser(componentKeys, 'component');
+
 /** Suppresses all output; the process exit code conveys the status instead. */
 const quietFlag = flag.boolean().alias('q').describe('Silent; exit code only');
 
@@ -75,11 +78,61 @@ const chromeFlag = flag
 	.env(CHROME_PATH_ENV)
 	.describe('Path to a Chrome/Chromium binary');
 
-/** Flattens the per-occurrence `--source` lists into the sources to query. */
+/** Restricts reported incidents/components to those naming the given GitHub
+ * component(s). Accepts comma-separated values and/or repeated flags. */
+const componentFlag = flag
+	.array(flag.custom(parseComponentList))
+	.alias('c')
+	.describe('Only report incidents/components mentioning these component(s)');
+
+/** Per-component convenience flags, e.g. `--actions` is shorthand for
+ * `--component actions`. */
+const componentConvenienceFlags = {
+	actions: flag.boolean().describe('Shortcut for --component actions'),
+	api: flag.boolean().describe('Shortcut for --component api'),
+	codespaces: flag.boolean().describe('Shortcut for --component codespaces'),
+	copilot: flag.boolean().describe('Shortcut for --component copilot'),
+	git: flag.boolean().describe('Shortcut for --component git'),
+	issues: flag.boolean().alias('issue').describe('Shortcut for --component issues'),
+	packages: flag.boolean().describe('Shortcut for --component packages'),
+	pages: flag.boolean().describe('Shortcut for --component pages'),
+	pr: flag.boolean().alias('prs').describe('Shortcut for --component pr'),
+	webhooks: flag.boolean().describe('Shortcut for --component webhooks'),
+} as const satisfies Record<ComponentKey, unknown>;
+
+/** Shape of the flag values used to determine which components were selected.
+ * `--component` resolves to one list per occurrence, flattened below. */
+type ComponentFlagValues =
+	& { component: readonly (readonly ComponentKey[])[] }
+	& Record<ComponentKey, boolean>;
+
+/** Unions the `--component` lists with any enabled per-component convenience flags. */
+function selectedComponents(flags: ComponentFlagValues): Set<ComponentKey> {
+	const selected = new Set<ComponentKey>(flags.component.flat());
+	for (const key of componentKeys) {
+		if (flags[key]) selected.add(key);
+	}
+
+	return selected;
+}
+
+/** Flattens the per-occurrence `--source` lists into the sources to query,
+ * deduplicated so `--source github,github` checks GitHub once. */
 function selectedSources(
 	source: readonly (readonly Source[])[],
 ): readonly Source[] {
-	return source.flat();
+	return [...new Set(source.flat())];
 }
 
-export { chromeFlag, githubStatusBaseFlag, parseSourceList, quietFlag, selectedSources, sourceSelectionFlag };
+export {
+	chromeFlag,
+	componentConvenienceFlags,
+	componentFlag,
+	githubStatusBaseFlag,
+	parseComponentList,
+	parseSourceList,
+	quietFlag,
+	selectedComponents,
+	selectedSources,
+	sourceSelectionFlag,
+};

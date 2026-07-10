@@ -1,10 +1,27 @@
-import { command, type Out } from '@kjanat/dreamcli';
+import type { CommandBuilder, Out } from '@kjanat/dreamcli';
+import { command } from '@kjanat/dreamcli';
 
-import { chromeFlag, githubStatusBaseFlag, quietFlag, selectedSources, sourceSelectionFlag } from '#github-down/cli/flags';
-import { type Source, sourceLabels } from '#github-down/cli/model';
+import {
+	chromeFlag,
+	componentConvenienceFlags,
+	componentFlag,
+	githubStatusBaseFlag,
+	quietFlag,
+	selectedComponents,
+	selectedSources,
+	sourceSelectionFlag,
+} from '#github-down/cli/flags';
+import { type ComponentKey, type Source, sourceLabels } from '#github-down/cli/model';
 import type { StatusRow } from '#github-down/cli/model';
 import { renderPageFooter, renderStatusRow, renderStatusRows } from '#github-down/cli/render';
-import { checkDowndetectorSource, checkGitHubSource, checkSource, sortRows, summarizeExitCode } from '#github-down/cli/status';
+import {
+	checkDowndetectorSource,
+	checkGitHubSource,
+	checkSource,
+	filterGitHubByComponents,
+	sortRows,
+	summarizeExitCode,
+} from '#github-down/cli/status';
 import { openUrlInDefaultBrowser } from '#github-down/lib/open-url';
 import pkg from '#pkg' with { type: 'json' };
 
@@ -16,6 +33,25 @@ type SourceTask = Readonly<{
 
 type UrlOpener = (url: string) => Promise<void> | void;
 
+/** Registers `--component` and every per-component convenience flag in one
+ * place, so the set can't drift between the `status` and `github` commands.
+ * Takes a still-flagless builder because dreamcli's `.flag()` name-clash
+ * guard (`Exclude<N, keyof F>`) can't be proven for an open generic `F`. */
+function withComponentFlags(cmd: CommandBuilder) {
+	return cmd
+		.flag('component', componentFlag)
+		.flag('actions', componentConvenienceFlags.actions)
+		.flag('api', componentConvenienceFlags.api)
+		.flag('codespaces', componentConvenienceFlags.codespaces)
+		.flag('copilot', componentConvenienceFlags.copilot)
+		.flag('git', componentConvenienceFlags.git)
+		.flag('issues', componentConvenienceFlags.issues)
+		.flag('packages', componentConvenienceFlags.packages)
+		.flag('pages', componentConvenienceFlags.pages)
+		.flag('pr', componentConvenienceFlags.pr)
+		.flag('webhooks', componentConvenienceFlags.webhooks);
+}
+
 /**
  * Drives a set of source checks and renders the result. In an interactive
  * terminal each row is streamed in as it resolves behind a spinner; otherwise
@@ -24,6 +60,7 @@ type UrlOpener = (url: string) => Promise<void> | void;
  */
 async function runStatus(
 	tasks: readonly SourceTask[],
+	selected: ReadonlySet<ComponentKey>,
 	quiet: boolean,
 	out: Out,
 ): Promise<void> {
@@ -31,12 +68,15 @@ async function runStatus(
 	// must stay a single array on stdout, non-TTY output is machine-bound, and
 	// quiet suppresses decoration entirely.
 	if (out.isTTY && !out.jsonMode && !quiet) {
-		const rows = await streamStatus(tasks, out);
+		const rows = await streamStatus(tasks, selected, out);
 		out.setExitCode(summarizeExitCode(rows));
 		return;
 	}
 
-	const rows = await Promise.all(tasks.map((task) => task.run()));
+	const rows = applyComponentFilter(
+		await Promise.all(tasks.map((task) => task.run())),
+		selected,
+	);
 	finishStatus(rows, quiet, out);
 }
 
@@ -57,6 +97,7 @@ function checkingText(pending: ReadonlySet<Source>): string {
  */
 async function streamStatus(
 	tasks: readonly SourceTask[],
+	selected: ReadonlySet<ComponentKey>,
 	out: Out,
 ): Promise<StatusRow[]> {
 	const pending = new Set<Source>(tasks.map((task) => task.source));
@@ -81,10 +122,11 @@ async function streamStatus(
 			inFlight.delete(settled.index);
 			pending.delete(settled.source);
 
-			collected.push(settled.row);
+			const row = filterGitHubByComponents(settled.row, selected);
+			collected.push(row);
 
 			spinner.stop();
-			renderStatusRow(settled.row, out, { leadingBlank: renderedRows > 0 });
+			renderStatusRow(row, out, { leadingBlank: renderedRows > 0 });
 			renderedRows += 1;
 			if (pending.size > 0) {
 				spinner = out.spinner(checkingText(pending));
@@ -112,11 +154,22 @@ function finishStatus(
 	out.setExitCode(summarizeExitCode(rows));
 }
 
-const statusCommand = command('status')
-	.description('Check GitHub status across GitHub and Downdetector')
-	.example('status', 'Check all sources')
-	.example('status --source github', 'Check only GitHub')
-	.example('status --json', 'Emit machine-readable source rows')
+function applyComponentFilter(
+	rows: readonly StatusRow[],
+	selected: ReadonlySet<ComponentKey>,
+): readonly StatusRow[] {
+	if (selected.size === 0) return rows;
+	return rows.map((row) => filterGitHubByComponents(row, selected));
+}
+
+const statusCommand = withComponentFlags(
+	command('status')
+		.description('Check GitHub status across GitHub and Downdetector')
+		.example('status', 'Check all sources')
+		.example('status --source github', 'Check only GitHub')
+		.example('status --actions', 'Only report trouble mentioning Actions')
+		.example('status --json', 'Emit machine-readable source rows'),
+)
 	.flag('githubStatusBase', githubStatusBaseFlag)
 	.flag('chrome', chromeFlag)
 	.flag('quiet', quietFlag)
@@ -129,12 +182,15 @@ const statusCommand = command('status')
 				run: () => checkSource(src, githubStatusBase, chrome),
 			}),
 		);
-		await runStatus(tasks, quiet, out);
+		await runStatus(tasks, selectedComponents(flags), quiet, out);
 	});
 
-const githubCommand = command('github')
-	.description(`Check only ${sourceLabels.github}`)
-	.example('github', `Check only ${sourceLabels.github}`)
+const githubCommand = withComponentFlags(
+	command('github')
+		.description(`Check only ${sourceLabels.github}`)
+		.example('github', `Check only ${sourceLabels.github}`)
+		.example('github --component actions', 'Only report trouble mentioning Actions'),
+)
 	.flag('githubStatusBase', githubStatusBaseFlag)
 	.flag('quiet', quietFlag)
 	.action(async ({ flags, out }) => {
@@ -144,7 +200,7 @@ const githubCommand = command('github')
 				run: () => checkGitHubSource(flags.githubStatusBase),
 			},
 		];
-		await runStatus(tasks, flags.quiet, out);
+		await runStatus(tasks, selectedComponents(flags), flags.quiet, out);
 	});
 
 const downdetectorCommand = command('downdetector')
@@ -159,7 +215,7 @@ const downdetectorCommand = command('downdetector')
 				run: () => checkDowndetectorSource(flags.chrome),
 			},
 		];
-		await runStatus(tasks, flags.quiet, out);
+		await runStatus(tasks, new Set(), flags.quiet, out);
 	});
 
 function createWebCommand(openUrl: UrlOpener = openUrlInDefaultBrowser) {
